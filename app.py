@@ -1,7 +1,6 @@
 """
-Aplikasi Analisis Pola Penyaluran Dana Zakat dan Infak
-Menggunakan Algoritma K-Means Clustering
-NU CARE Kabupaten Wonosobo
+Analisis Pola Penyaluran Dana Zakat dan Infak
+K-Means Clustering — NU CARE Kabupaten Wonosobo
 """
 
 import streamlit as st
@@ -10,283 +9,317 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
-from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_score, silhouette_samples
 import io
 
 # ======================================================
 # KONFIGURASI HALAMAN
 # ======================================================
 st.set_page_config(
-    page_title="Clustering Penyaluran Zakat & Infak",
+    page_title="Analisis Penyaluran Zakat & Infak — NU CARE Wonosobo",
     page_icon="📊",
     layout="wide"
 )
 
-st.title("📊 Analisis Pola Penyaluran Dana Zakat dan Infak")
-st.markdown("**K-Means Clustering — NU CARE Kabupaten Wonosobo**")
-st.markdown("---")
+# ======================================================
+# PALET WARNA & FONT (mengikuti referensi desain)
+# ======================================================
+CLUSTER_COLORS = ["#B9872C", "#2F6B4F", "#8A4B3B", "#3E5A78", "#7A5B8C"]
+LABELS_BY_K = {
+    2: ["Rendah", "Tinggi"],
+    3: ["Rendah", "Sedang", "Tinggi"],
+    4: ["Sangat Rendah", "Rendah", "Tinggi", "Sangat Tinggi"],
+    5: ["Sangat Rendah", "Rendah", "Sedang", "Tinggi", "Sangat Tinggi"],
+}
+
+KECAMATAN_LIST = [
+    "Wonosobo", "Kertek", "Selomerto", "Leksono", "Sukoharjo", "Watumalang",
+    "Mojotengah", "Garung", "Kejajar", "Kalikajar", "Kepil", "Sapuran",
+    "Kaliwiro", "Wadaslintang", "Kalibawang"
+]
+
+st.markdown("""
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper: #F1F0E6;
+    --paper-2: #E9E7D8;
+    --ink: #1C2A21;
+    --ink-soft: #4A574C;
+    --deep: #163829;
+    --deep-2: #0E271B;
+    --gold: #B9872C;
+    --gold-light: #E4C77E;
+    --line: #D7D2BE;
+  }
+  html, body, [class*="css"]  { font-family: 'Inter', sans-serif; }
+  .stApp { background-color: var(--paper); }
+  h1, h2, h3 { font-family: 'Fraunces', Georgia, serif !important; color: var(--deep); }
+  .stButton>button {
+      background-color: var(--deep); color: white; border-radius: 8px; border: none;
+      font-weight: 600;
+  }
+  .stButton>button:hover { background-color: var(--deep-2); color: white; }
+  .stTabs [data-baseweb="tab-list"] { gap: 4px; background: var(--paper-2); padding: 4px; border-radius: 12px; }
+  .stTabs [data-baseweb="tab"] { border-radius: 9px; font-weight: 600; color: var(--ink-soft); }
+  .stTabs [aria-selected="true"] { background-color: var(--deep) !important; color: white !important; }
+  .hero {
+      background: linear-gradient(155deg, var(--deep), var(--deep-2));
+      color: #FBFAF4; padding: 24px 28px; border-radius: 14px; margin-bottom: 20px;
+  }
+  .hero .eyebrow { font-family:'IBM Plex Mono', monospace; font-size:11.5px; letter-spacing:.14em;
+      text-transform:uppercase; color: var(--gold-light); }
+  .hero h1 { color: white !important; font-size: 26px; margin: 6px 0; }
+  .hero .sub { font-size: 13px; color: rgba(251,250,244,0.75); }
+  .metric-card {
+      background: white; border: 1px solid var(--line); border-radius: 10px; padding: 16px;
+      border-top: 4px solid var(--gold);
+  }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="hero">
+  <span class="eyebrow">Sistem Pendukung Analisis · Tugas Akhir</span>
+  <h1>Analisis Pola Penyaluran Dana Zakat &amp; Infak dengan K-Means Clustering</h1>
+  <div class="sub">NU CARE – LAZISNU Kabupaten Wonosobo · Mengelompokkan pola penyaluran berdasarkan jumlah dana dan jumlah mustahik.</div>
+</div>
+""", unsafe_allow_html=True)
 
 # ======================================================
-# SESSION STATE
+# STATE AWAL
 # ======================================================
-if "df" not in st.session_state:
-    st.session_state.df = None
-if "clustered_df" not in st.session_state:
-    st.session_state.clustered_df = None
+def seed_data():
+    periods = ["Januari 2026", "Februari 2026", "Maret 2026"]
+    rows = [
+        ("Wonosobo", 0, 22000000, 95), ("Wonosobo", 1, 24500000, 101), ("Wonosobo", 2, 26000000, 110),
+        ("Kertek", 0, 9500000, 38), ("Kertek", 1, 10200000, 41),
+        ("Selomerto", 0, 8700000, 35), ("Selomerto", 2, 9100000, 37),
+        ("Leksono", 0, 4200000, 17), ("Leksono", 1, 4600000, 19),
+        ("Sukoharjo", 0, 3800000, 15),
+        ("Watumalang", 0, 5200000, 21), ("Watumalang", 2, 5500000, 23),
+        ("Mojotengah", 0, 12500000, 50), ("Mojotengah", 1, 13100000, 53),
+        ("Garung", 0, 6300000, 26),
+        ("Kejajar", 0, 3100000, 12), ("Kejajar", 2, 3400000, 13),
+        ("Kalikajar", 0, 7600000, 31),
+        ("Kepil", 0, 4900000, 20),
+        ("Sapuran", 0, 6100000, 25), ("Sapuran", 1, 6400000, 26),
+        ("Kaliwiro", 0, 3500000, 14),
+        ("Wadaslintang", 0, 2800000, 11),
+        ("Kalibawang", 0, 2600000, 10),
+    ]
+    return pd.DataFrame([
+        {"Kecamatan": r[0], "Periode": periods[r[1]], "Dana (Rp)": r[2], "Mustahik": r[3]}
+        for r in rows
+    ])
+
+if "data" not in st.session_state:
+    st.session_state.data = seed_data()
 
 # ======================================================
-# SIDEBAR - UPLOAD DATA
+# TAB NAVIGASI
 # ======================================================
-st.sidebar.header("1️⃣ Upload Data")
-uploaded_file = st.sidebar.file_uploader(
-    "Upload file data penyaluran (CSV atau Excel)",
-    type=["csv", "xlsx", "xls"]
-)
-
-if uploaded_file is not None:
-    try:
-        if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
-        st.session_state.df = df
-        st.sidebar.success(f"Data berhasil dimuat: {df.shape[0]} baris, {df.shape[1]} kolom")
-    except Exception as e:
-        st.sidebar.error(f"Gagal membaca file: {e}")
+tab1, tab2 = st.tabs(["1 · Input Data", "2 · Hasil Clustering"])
 
 # ======================================================
-# JIKA DATA SUDAH ADA
+# TAB 1 — INPUT DATA
 # ======================================================
-if st.session_state.df is not None:
-    df = st.session_state.df
+with tab1:
+    col_form, col_table = st.columns([1, 2], gap="large")
 
-    # --------------------------------------------------
-    # PREVIEW DATA
-    # --------------------------------------------------
-    st.header("📄 Preview Data")
-    st.dataframe(df.head(20), use_container_width=True)
-    st.caption(f"Total data: {df.shape[0]} baris | {df.shape[1]} kolom")
+    with col_form:
+        st.subheader("Tambah Data Penyaluran")
+        st.caption("Satu baris data mewakili satu penyaluran pada suatu kecamatan & periode.")
+        with st.form("form_tambah", clear_on_submit=True):
+            kecamatan = st.selectbox("Kecamatan / Wilayah", KECAMATAN_LIST)
+            periode = st.text_input("Periode", placeholder="Januari 2026")
+            dana = st.number_input("Jumlah Dana Disalurkan (Rp)", min_value=0, step=100000, value=0)
+            mustahik = st.number_input("Jumlah Mustahik (orang)", min_value=0, step=1, value=0)
+            submitted = st.form_submit_button("+ Tambah Data", use_container_width=True)
 
-    with st.expander("Lihat statistik deskriptif"):
-        st.dataframe(df.describe(), use_container_width=True)
-
-    st.markdown("---")
-
-    # --------------------------------------------------
-    # PEMILIHAN FITUR / ATRIBUT
-    # --------------------------------------------------
-    st.header("⚙️ 2. Pemilihan Atribut untuk Clustering")
-
-    numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
-
-    if len(numeric_cols) < 2:
-        st.error("Data numerik yang tersedia kurang dari 2 kolom. Clustering membutuhkan minimal 2 atribut numerik.")
-    else:
-        selected_features = st.multiselect(
-            "Pilih atribut/kolom numerik yang akan digunakan untuk clustering "
-            "(misal: fakir, miskin, amil, mualaf, riqob, ghorim, sabilillah, ibnu sabil)",
-            options=numeric_cols,
-            default=numeric_cols
-        )
-
-        # --------------------------------------------------
-        # PENANGANAN MISSING VALUE
-        # --------------------------------------------------
-        handle_na = st.radio(
-            "Data kosong (missing value) ditangani dengan:",
-            ["Hapus baris yang kosong", "Isi dengan nilai 0", "Isi dengan rata-rata kolom"],
-            horizontal=True
-        )
-
-        if len(selected_features) >= 2:
-            data = df[selected_features].copy()
-
-            if handle_na == "Hapus baris yang kosong":
-                data = data.dropna()
-            elif handle_na == "Isi dengan nilai 0":
-                data = data.fillna(0)
-            else:
-                data = data.fillna(data.mean(numeric_only=True))
-
-            valid_index = data.index
-
-            # --------------------------------------------------
-            # STANDARISASI DATA
-            # --------------------------------------------------
-            scaler = StandardScaler()
-            data_scaled = scaler.fit_transform(data)
-
-            st.markdown("---")
-
-            # --------------------------------------------------
-            # 3. PENENTUAN JUMLAH CLUSTER
-            # --------------------------------------------------
-            st.header("🔍 3. Penentuan Jumlah Cluster (k)")
-
-            k_mode = st.radio(
-                "Metode penentuan jumlah cluster:",
-                ["Otomatis (Elbow Method & Silhouette Score)", "Manual"],
-                horizontal=True
-            )
-
-            max_k = st.slider("Batas maksimal k yang diuji", min_value=3, max_value=min(10, len(data) - 1), value=8)
-
-            if max_k < 2 or len(data) < 4:
-                st.warning("Data terlalu sedikit untuk melakukan clustering yang bermakna.")
-            else:
-                k_range = range(2, max_k + 1)
-                inertias = []
-                silhouettes = []
-
-                for k in k_range:
-                    km = KMeans(n_clusters=k, random_state=42, n_init=10)
-                    labels_k = km.fit_predict(data_scaled)
-                    inertias.append(km.inertia_)
-                    silhouettes.append(silhouette_score(data_scaled, labels_k))
-
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    fig, ax = plt.subplots()
-                    ax.plot(list(k_range), inertias, marker="o", color="#2563eb")
-                    ax.set_xlabel("Jumlah Cluster (k)")
-                    ax.set_ylabel("Inertia (WCSS)")
-                    ax.set_title("Elbow Method")
-                    ax.grid(alpha=0.3)
-                    st.pyplot(fig)
-
-                with col2:
-                    fig2, ax2 = plt.subplots()
-                    ax2.plot(list(k_range), silhouettes, marker="o", color="#16a34a")
-                    ax2.set_xlabel("Jumlah Cluster (k)")
-                    ax2.set_ylabel("Silhouette Score")
-                    ax2.set_title("Silhouette Score")
-                    ax2.grid(alpha=0.3)
-                    st.pyplot(fig2)
-
-                best_k_auto = list(k_range)[int(np.argmax(silhouettes))]
-                st.info(f"💡 Rekomendasi k berdasarkan Silhouette Score tertinggi: **k = {best_k_auto}** "
-                        f"(Silhouette Score = {max(silhouettes):.4f})")
-
-                if k_mode == "Otomatis (Elbow Method & Silhouette Score)":
-                    final_k = best_k_auto
+            if submitted:
+                if not periode.strip() or dana <= 0 or mustahik <= 0:
+                    st.error("Mohon lengkapi semua isian dengan nilai yang valid.")
                 else:
-                    final_k = st.number_input(
-                        "Masukkan jumlah cluster (k) secara manual",
-                        min_value=2, max_value=max_k, value=best_k_auto, step=1
-                    )
+                    new_row = pd.DataFrame([{
+                        "Kecamatan": kecamatan, "Periode": periode.strip(),
+                        "Dana (Rp)": dana, "Mustahik": mustahik
+                    }])
+                    st.session_state.data = pd.concat([st.session_state.data, new_row], ignore_index=True)
+                    st.success("Data berhasil ditambahkan.")
+                    st.rerun()
 
-                st.markdown("---")
+        st.markdown("---")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("↺ Muat Data Contoh", use_container_width=True):
+                st.session_state.data = pd.concat([st.session_state.data, seed_data()], ignore_index=True)
+                st.rerun()
+        with c2:
+            if st.button("🗑 Hapus Semua", use_container_width=True):
+                st.session_state.data = st.session_state.data.iloc[0:0]
+                st.rerun()
 
-                # --------------------------------------------------
-                # 4. PROSES K-MEANS CLUSTERING
-                # --------------------------------------------------
-                st.header(f"🧩 4. Hasil K-Means Clustering (k = {final_k})")
+        uploaded = st.file_uploader("⬆ Impor CSV (kolom: Kecamatan, Periode, Dana (Rp), Mustahik)", type=["csv"])
+        if uploaded is not None:
+            try:
+                imported = pd.read_csv(uploaded)
+                st.session_state.data = pd.concat([st.session_state.data, imported], ignore_index=True)
+                st.success(f"{len(imported)} baris berhasil diimpor.")
+            except Exception as e:
+                st.error(f"Gagal membaca CSV: {e}")
 
-                kmeans_final = KMeans(n_clusters=final_k, random_state=42, n_init=10)
-                cluster_labels = kmeans_final.fit_predict(data_scaled)
-                final_silhouette = silhouette_score(data_scaled, cluster_labels)
+    with col_table:
+        st.subheader(f"Data Penyaluran ({len(st.session_state.data)} baris)")
+        st.caption("Kamu bisa edit langsung di tabel (klik sel), atau hapus baris lewat ikon 🗑 di ujung kiri baris.")
 
-                result_df = df.loc[valid_index].copy()
-                result_df["Cluster"] = cluster_labels
-                st.session_state.clustered_df = result_df
+        edited = st.data_editor(
+            st.session_state.data,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="editor_data",
+            column_config={
+                "Dana (Rp)": st.column_config.NumberColumn(format="Rp %d"),
+                "Mustahik": st.column_config.NumberColumn(format="%d orang"),
+            }
+        )
+        st.session_state.data = edited
 
-                st.metric("Silhouette Score Akhir", f"{final_silhouette:.4f}")
+        csv_buf = io.StringIO()
+        st.session_state.data.to_csv(csv_buf, index=False)
+        st.download_button(
+            "⬇ Ekspor CSV", data=csv_buf.getvalue(),
+            file_name="data_penyaluran_nucare_wonosobo.csv", mime="text/csv"
+        )
 
-                st.dataframe(result_df, use_container_width=True)
+        st.info("⚠️ Data tersimpan sementara selama sesi ini berjalan. Ekspor CSV secara berkala agar tidak hilang saat halaman ditutup/refresh.")
 
-                st.markdown("---")
+# ======================================================
+# TAB 2 — HASIL CLUSTERING
+# ======================================================
+with tab2:
+    df = st.session_state.data.dropna()
+    df = df[(df["Dana (Rp)"] > 0) & (df["Mustahik"] > 0)]
 
-                # --------------------------------------------------
-                # 5. VISUALISASI CLUSTER
-                # --------------------------------------------------
-                st.header("📈 5. Visualisasi Cluster")
+    st.subheader("Pengaturan K-Means")
+    st.caption(
+        "Fitur yang distandardisasi (StandardScaler): **Jumlah Dana** dan **Jumlah Mustahik**. "
+        "Kecamatan digunakan sebagai label wilayah pada tiap titik data."
+    )
 
-                tab1, tab2 = st.tabs(["Scatter Plot Cluster", "Karakteristik Tiap Cluster"])
+    colk, colbtn = st.columns([3, 1])
+    with colk:
+        k = st.select_slider("Jumlah Klaster (k)", options=[2, 3, 4, 5], value=3)
+    with colbtn:
+        run = st.button("▶ Jalankan Clustering", use_container_width=True)
 
-                with tab1:
-                    if len(selected_features) == 2:
-                        fig3, ax3 = plt.subplots(figsize=(7, 5))
-                        scatter = ax3.scatter(
-                            data[selected_features[0]], data[selected_features[1]],
-                            c=cluster_labels, cmap="tab10", s=60, edgecolor="k", alpha=0.8
-                        )
-                        ax3.set_xlabel(selected_features[0])
-                        ax3.set_ylabel(selected_features[1])
-                        ax3.set_title("Visualisasi Cluster (2 Atribut)")
-                        legend1 = ax3.legend(*scatter.legend_elements(), title="Cluster")
-                        ax3.add_artist(legend1)
-                        st.pyplot(fig3)
-                    else:
-                        pca = PCA(n_components=2, random_state=42)
-                        components = pca.fit_transform(data_scaled)
-                        fig3, ax3 = plt.subplots(figsize=(7, 5))
-                        scatter = ax3.scatter(
-                            components[:, 0], components[:, 1],
-                            c=cluster_labels, cmap="tab10", s=60, edgecolor="k", alpha=0.8
-                        )
-                        ax3.set_xlabel("Komponen Utama 1 (PCA)")
-                        ax3.set_ylabel("Komponen Utama 2 (PCA)")
-                        ax3.set_title("Visualisasi Cluster (Reduksi Dimensi PCA)")
-                        legend1 = ax3.legend(*scatter.legend_elements(), title="Cluster")
-                        ax3.add_artist(legend1)
-                        st.pyplot(fig3)
-                        st.caption(
-                            f"Karena atribut lebih dari 2, data direduksi menjadi 2 dimensi menggunakan PCA "
-                            f"(variansi terjelaskan: {pca.explained_variance_ratio_.sum() * 100:.1f}%)."
-                        )
+    if len(df) < k:
+        st.warning(f"Data terlalu sedikit untuk k={k} (minimal {k} baris valid). Saat ini tersedia {len(df)} baris.")
+    elif run or "last_result" in st.session_state:
+        if run:
+            X = df[["Dana (Rp)", "Mustahik"]].values
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X)
 
-                with tab2:
-                    cluster_summary = result_df.groupby("Cluster")[selected_features].mean()
-                    st.dataframe(cluster_summary.style.background_gradient(cmap="Blues"), use_container_width=True)
+            model = KMeans(n_clusters=k, random_state=42, n_init=10)
+            assign = model.fit_predict(X_scaled)
 
-                    fig4, ax4 = plt.subplots(figsize=(9, 5))
-                    cluster_summary.plot(kind="bar", ax=ax4)
-                    ax4.set_title("Rata-rata Nilai Atribut per Cluster")
-                    ax4.set_ylabel("Nilai Rata-rata")
-                    ax4.set_xlabel("Cluster")
-                    ax4.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
-                    plt.xticks(rotation=0)
-                    st.pyplot(fig4)
+            # urutkan klaster berdasarkan rata-rata (dana+mustahik) standar, agar label konsisten Rendah->Tinggi
+            order = np.argsort(model.cluster_centers_.sum(axis=1))
+            rank = {orig: pos for pos, orig in enumerate(order)}
+            rank_labels = np.array([rank[a] for a in assign])
 
-                    cluster_counts = result_df["Cluster"].value_counts().sort_index()
-                    st.write("**Jumlah anggota per cluster:**")
-                    st.bar_chart(cluster_counts)
+            labels_txt = LABELS_BY_K.get(k, [f"Klaster {i+1}" for i in range(k)])
+            sil_overall = silhouette_score(X_scaled, assign)
+            sil_samples = silhouette_samples(X_scaled, assign)
 
-                st.markdown("---")
+            st.session_state.last_result = {
+                "df": df.copy(), "X_scaled": X_scaled, "rank_labels": rank_labels,
+                "labels_txt": labels_txt, "sil_overall": sil_overall,
+                "sil_samples": sil_samples, "k": k
+            }
 
-                # --------------------------------------------------
-                # 6. DOWNLOAD HASIL
-                # --------------------------------------------------
-                st.header("⬇️ 6. Download Hasil Clustering")
+        r = st.session_state.last_result
+        df_r = r["df"].copy()
+        df_r["Klaster"] = [f"Klaster {c+1} · {r['labels_txt'][c]}" for c in r["rank_labels"]]
+        df_r["_cluster_idx"] = r["rank_labels"]
 
-                csv_buffer = io.StringIO()
-                result_df.to_csv(csv_buffer, index=False)
-                st.download_button(
-                    label="Download Hasil Clustering (CSV)",
-                    data=csv_buffer.getvalue(),
-                    file_name="hasil_clustering_zakat_infak.csv",
-                    mime="text/csv"
-                )
+        st.success(f"Selesai · {len(df_r)} data dikelompokkan ke dalam {r['k']} klaster.")
 
-                summary_buffer = io.StringIO()
-                cluster_summary.to_csv(summary_buffer)
-                st.download_button(
-                    label="Download Ringkasan Karakteristik Cluster (CSV)",
-                    data=summary_buffer.getvalue(),
-                    file_name="ringkasan_karakteristik_cluster.csv",
-                    mime="text/csv"
-                )
-        else:
-            st.warning("Pilih minimal 2 atribut numerik untuk melanjutkan proses clustering.")
+        # ---------------- Peta Klaster ----------------
+        st.markdown("### Peta Klaster")
+        st.caption("Posisi tiap titik berdasarkan Jumlah Dana (X) dan Jumlah Mustahik (Y) yang telah distandardisasi (Z-score).")
 
-else:
-    st.info("👈 Silakan upload file data penyaluran (CSV/Excel) melalui sidebar untuk memulai.")
-    st.markdown("""
-    **Format data yang disarankan:**
-    Setiap baris merepresentasikan satu transaksi/periode penyaluran, dengan kolom numerik seperti:
-    - `fakir`, `miskin`, `amil`, `mualaf`, `riqob`, `ghorim`, `sabilillah`, `ibnu_sabil`
-    - Kolom lain (nama program, periode, dll) boleh ada dan tidak akan ikut dihitung dalam clustering
-      kecuali dipilih secara manual.
-    """)
+        fig, ax = plt.subplots(figsize=(8, 5))
+        for c in range(r["k"]):
+            mask = r["rank_labels"] == c
+            ax.scatter(
+                r["X_scaled"][mask, 0], r["X_scaled"][mask, 1],
+                color=CLUSTER_COLORS[c % len(CLUSTER_COLORS)],
+                label=f"Klaster {c+1} · {r['labels_txt'][c]}",
+                s=70, edgecolor="white", alpha=0.85
+            )
+        ax.axhline(0, color="#D7D2BE", linestyle="--", linewidth=1)
+        ax.axvline(0, color="#D7D2BE", linestyle="--", linewidth=1)
+        ax.set_xlabel("Jumlah Dana (Z-score)")
+        ax.set_ylabel("Jumlah Mustahik (Z-score)")
+        ax.legend(loc="best", fontsize=8)
+        ax.set_facecolor("#F1F0E6")
+        fig.patch.set_facecolor("#F1F0E6")
+        st.pyplot(fig)
+
+        # ---------------- Ringkasan Klaster ----------------
+        st.markdown("### Ringkasan Klaster")
+        cols = st.columns(r["k"])
+        for c in range(r["k"]):
+            sub = df_r[df_r["_cluster_idx"] == c]
+            with cols[c]:
+                st.markdown(f"""
+                <div class="metric-card" style="border-top-color:{CLUSTER_COLORS[c % len(CLUSTER_COLORS)]}">
+                    <b>Klaster {c+1} · {r['labels_txt'][c]}</b><br>
+                    <span style="font-size:12px;color:#4A574C;">Jumlah data: {len(sub)}</span><br>
+                    <span style="font-size:12px;color:#4A574C;">Rata-rata dana: Rp {sub['Dana (Rp)'].mean():,.0f}</span><br>
+                    <span style="font-size:12px;color:#4A574C;">Rata-rata mustahik: {sub['Mustahik'].mean():,.0f}</span>
+                </div>
+                """, unsafe_allow_html=True)
+
+        # ---------------- Matriks Evaluasi ----------------
+        st.markdown("### Matriks Evaluasi Klaster")
+        colm1, colm2 = st.columns(2)
+        colm1.metric("Silhouette Score", f"{r['sil_overall']:.3f}")
+        colm2.metric("Jumlah Klaster (k)", r["k"])
+
+        eval_rows = []
+        for c in range(r["k"]):
+            mask = r["rank_labels"] == c
+            avg_sil = r["sil_samples"][mask].mean() if mask.sum() > 0 else 0
+            eval_rows.append({
+                "Klaster": f"Klaster {c+1} · {r['labels_txt'][c]}",
+                "Jumlah Data": int(mask.sum()),
+                "Rata-rata Silhouette": round(avg_sil, 3)
+            })
+        st.dataframe(pd.DataFrame(eval_rows), use_container_width=True, hide_index=True)
+
+        # ---------------- Tabel Detail ----------------
+        st.markdown("### Detail Hasil per Data")
+        st.dataframe(
+            df_r.drop(columns=["_cluster_idx"]),
+            use_container_width=True, hide_index=True
+        )
+
+        csv_result = io.StringIO()
+        df_r.drop(columns=["_cluster_idx"]).to_csv(csv_result, index=False)
+        st.download_button(
+            "⬇ Download Hasil Clustering (CSV)", data=csv_result.getvalue(),
+            file_name="hasil_clustering_zakat_infak.csv", mime="text/csv"
+        )
+
+        st.caption(
+            "Metode: K-Means (scikit-learn) dengan fitur distandardisasi menggunakan StandardScaler "
+            "(Z-score) agar skala Rupiah dan jumlah orang setara bobotnya. Evaluasi kualitas klaster "
+            "menggunakan Silhouette Score. Label klaster (Rendah/Sedang/Tinggi, dst.) ditentukan otomatis "
+            "dari urutan rata-rata nilai centroid."
+        )
+    else:
+        st.info("Klik **▶ Jalankan Clustering** untuk melihat hasil.")
