@@ -11,6 +11,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, silhouette_samples
 import io
+import re
 
 # ======================================================
 # KONFIGURASI HALAMAN
@@ -114,6 +115,71 @@ def seed_data():
         for r in rows
     ])
 
+def parse_rekap_zakat(file):
+    """
+    Parser khusus untuk file rekap zakat dengan format:
+    - Baris judul berisi 'REKAPITULASI ... KEC.<NAMA> TAHUN <PERIODE>'
+    - Header bertingkat (baris kolom utama + baris satuan)
+    - Data per Desa -> Dukuh, dengan kolom:
+      NO, DESA, DUKUH, ZAKAT FITRAH UANG, ZAKAT FITRAH BERAS(KG), ZAKAT MAL UANG,
+      (kosong), FAKIR, MISKIN, AMIL, MUALAF, RIQOB, GHORIM, SABILILAH, IBNUSABIL,
+      MUSTAHIK ORANG, MUZAKI, MAL ORANG
+    - Baris 'JUMLAH' di file sumber sering kosong/tidak diisi, sehingga total
+      dihitung ulang dari penjumlahan tiap dukuh, bukan mengandalkan baris JUMLAH.
+    Menghasilkan data per Desa: Kecamatan, Periode, Dana (Rp), Mustahik.
+    """
+    raw = pd.read_excel(file, header=None)
+
+    # cari baris judul
+    title_text = ""
+    for i in range(min(5, len(raw))):
+        joined = " ".join(str(v) for v in raw.iloc[i].tolist() if str(v) != "nan")
+        if "REKAPITULASI" in joined.upper():
+            title_text = joined
+            break
+
+    kec_match = re.search(r"KEC\.?\s*([A-Z\s]+?)(?:\s+TAHUN|$)", title_text.upper())
+    kecamatan = kec_match.group(1).strip().title() if kec_match else "Tidak Diketahui"
+    tahun_match = re.search(r"TAHUN\s+([\d/]+\s*H?)", title_text.upper())
+    periode = tahun_match.group(1).strip() if tahun_match else ""
+
+    # cari baris header (sel yang isinya persis 'DESA')
+    header_row_idx = None
+    for i in range(len(raw)):
+        vals = [str(v).strip().upper() for v in raw.iloc[i].tolist()]
+        if "DESA" in vals:
+            header_row_idx = i
+            break
+    if header_row_idx is None:
+        raise ValueError("Format file tidak dikenali: tidak ditemukan baris header 'DESA'.")
+
+    data_start = header_row_idx + 2  # lewati baris satuan
+    data = raw.iloc[data_start:].reset_index(drop=True)
+    data.columns = range(data.shape[1])
+    data[1] = data[1].ffill()  # isi nama desa yang menyatu (merged cell)
+    data = data.dropna(how="all")
+
+    is_jumlah = data[2].astype(str).str.strip().str.upper() == "JUMLAH"
+    detail = data[~is_jumlah].copy()
+    detail = detail.dropna(subset=[2])  # baris harus punya nama dukuh
+
+    for c in [3, 5, 15]:
+        detail[c] = pd.to_numeric(detail[c], errors="coerce").fillna(0)
+
+    grouped = detail.groupby(1, sort=False).agg(
+        fitrah=(3, "sum"), mal=(5, "sum"), mustahik=(15, "sum")
+    ).reset_index()
+
+    result = pd.DataFrame({
+        "Kecamatan": kecamatan,
+        "Periode": periode if periode else "Tidak diketahui",
+        "Desa": grouped[1],
+        "Dana (Rp)": grouped["fitrah"] + grouped["mal"],
+        "Mustahik": grouped["mustahik"],
+    })
+    return result[result["Dana (Rp)"] > 0].reset_index(drop=True)
+
+
 if "data" not in st.session_state:
     st.session_state.data = seed_data()
 
@@ -161,27 +227,58 @@ with tab1:
                 st.session_state.data = st.session_state.data.iloc[0:0]
                 st.rerun()
 
+        import_mode = st.radio(
+            "Mode impor",
+            ["Template Sederhana (Kecamatan, Periode, Dana, Mustahik)",
+             "Rekap Zakat per Kecamatan (format Desa/Dukuh)"],
+            help="Pilih 'Rekap Zakat per Kecamatan' untuk file seperti REKAPITULASI PEROLEHAN ZAKAT "
+                 "dengan rincian per Desa/Dukuh. Data akan digabung otomatis per Desa."
+        )
         uploaded = st.file_uploader(
-            "⬆ Impor Data (CSV atau Excel — kolom: Kecamatan, Periode, Dana (Rp), Mustahik)",
+            "⬆ Impor Data (CSV atau Excel)",
             type=["csv", "xlsx", "xls"]
         )
         if uploaded is not None:
             try:
-                if uploaded.name.endswith(".csv"):
-                    imported = pd.read_csv(uploaded)
+                if import_mode.startswith("Rekap Zakat"):
+                    if not uploaded.name.endswith((".xlsx", ".xls")):
+                        st.error("Mode 'Rekap Zakat per Kecamatan' hanya mendukung file Excel (.xlsx/.xls).")
+                    else:
+                        parsed = parse_rekap_zakat(uploaded)
+                        preview = parsed.rename(columns={"Desa": "Periode (+Desa)"})
+                        # gabungkan nama desa ke kolom Periode agar tetap terlihat rinciannya,
+                        # dan simpan nama desa sebagai bagian dari label Kecamatan
+                        imported = pd.DataFrame({
+                            "Kecamatan": parsed["Kecamatan"] + " - " + parsed["Desa"],
+                            "Periode": parsed["Periode"],
+                            "Dana (Rp)": parsed["Dana (Rp)"],
+                            "Mustahik": parsed["Mustahik"],
+                        })
+                        st.session_state.data = pd.concat([st.session_state.data, imported], ignore_index=True)
+                        st.success(
+                            f"{len(imported)} desa berhasil diimpor dari {uploaded.name} "
+                            f"(Kecamatan {parsed['Kecamatan'].iloc[0]}, Periode {parsed['Periode'].iloc[0]})."
+                        )
+                        with st.expander("Lihat detail hasil parsing"):
+                            st.dataframe(parsed, use_container_width=True, hide_index=True)
                 else:
-                    imported = pd.read_excel(uploaded)
+                    if uploaded.name.endswith(".csv"):
+                        imported = pd.read_csv(uploaded)
+                    else:
+                        imported = pd.read_excel(uploaded)
 
-                required_cols = {"Kecamatan", "Periode", "Dana (Rp)", "Mustahik"}
-                if not required_cols.issubset(set(imported.columns)):
-                    st.error(
-                        "Kolom pada file tidak sesuai. Pastikan file memiliki kolom: "
-                        "Kecamatan, Periode, Dana (Rp), Mustahik."
-                    )
-                else:
-                    imported = imported[["Kecamatan", "Periode", "Dana (Rp)", "Mustahik"]]
-                    st.session_state.data = pd.concat([st.session_state.data, imported], ignore_index=True)
-                    st.success(f"{len(imported)} baris berhasil diimpor dari {uploaded.name}.")
+                    required_cols = {"Kecamatan", "Periode", "Dana (Rp)", "Mustahik"}
+                    if not required_cols.issubset(set(imported.columns)):
+                        st.error(
+                            "Kolom pada file tidak sesuai. Pastikan file memiliki kolom: "
+                            "Kecamatan, Periode, Dana (Rp), Mustahik. "
+                            "Kalau file kamu format rekap per Desa/Dukuh, gunakan mode "
+                            "'Rekap Zakat per Kecamatan' di atas."
+                        )
+                    else:
+                        imported = imported[["Kecamatan", "Periode", "Dana (Rp)", "Mustahik"]]
+                        st.session_state.data = pd.concat([st.session_state.data, imported], ignore_index=True)
+                        st.success(f"{len(imported)} baris berhasil diimpor dari {uploaded.name}.")
             except Exception as e:
                 st.error(f"Gagal membaca file: {e}")
 
