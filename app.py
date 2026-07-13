@@ -161,14 +161,29 @@ with tab1:
                 st.session_state.data = st.session_state.data.iloc[0:0]
                 st.rerun()
 
-        uploaded = st.file_uploader("⬆ Impor CSV (kolom: Kecamatan, Periode, Dana (Rp), Mustahik)", type=["csv"])
+        uploaded = st.file_uploader(
+            "⬆ Impor Data (CSV atau Excel — kolom: Kecamatan, Periode, Dana (Rp), Mustahik)",
+            type=["csv", "xlsx", "xls"]
+        )
         if uploaded is not None:
             try:
-                imported = pd.read_csv(uploaded)
-                st.session_state.data = pd.concat([st.session_state.data, imported], ignore_index=True)
-                st.success(f"{len(imported)} baris berhasil diimpor.")
+                if uploaded.name.endswith(".csv"):
+                    imported = pd.read_csv(uploaded)
+                else:
+                    imported = pd.read_excel(uploaded)
+
+                required_cols = {"Kecamatan", "Periode", "Dana (Rp)", "Mustahik"}
+                if not required_cols.issubset(set(imported.columns)):
+                    st.error(
+                        "Kolom pada file tidak sesuai. Pastikan file memiliki kolom: "
+                        "Kecamatan, Periode, Dana (Rp), Mustahik."
+                    )
+                else:
+                    imported = imported[["Kecamatan", "Periode", "Dana (Rp)", "Mustahik"]]
+                    st.session_state.data = pd.concat([st.session_state.data, imported], ignore_index=True)
+                    st.success(f"{len(imported)} baris berhasil diimpor dari {uploaded.name}.")
             except Exception as e:
-                st.error(f"Gagal membaca CSV: {e}")
+                st.error(f"Gagal membaca file: {e}")
 
     with col_table:
         st.subheader(f"Data Penyaluran ({len(st.session_state.data)} baris)")
