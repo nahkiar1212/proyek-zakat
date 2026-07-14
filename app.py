@@ -195,9 +195,9 @@ def parse_rekap_zakat(file):
 
     # kolom sesuai struktur berkas sumber (indeks 0-based)
     COL_FAKIR, COL_MISKIN, COL_AMIL = 7, 8, 9
-    COL_SABILILAH, COL_IBNUSABIL, COL_MUSTAHIK = 13, 14, 15
+    COL_SABILILAH, COL_IBNUSABIL = 13, 14
 
-    for c in [COL_FAKIR, COL_MISKIN, COL_AMIL, COL_SABILILAH, COL_IBNUSABIL, COL_MUSTAHIK]:
+    for c in [COL_FAKIR, COL_MISKIN, COL_AMIL, COL_SABILILAH, COL_IBNUSABIL]:
         detail[c] = pd.to_numeric(detail[c], errors="coerce").fillna(0)
 
     result = pd.DataFrame({
@@ -210,8 +210,11 @@ def parse_rekap_zakat(file):
         "Amil": detail[COL_AMIL],
         "Sabilillah": detail[COL_SABILILAH],
         "Ibnu Sabil": detail[COL_IBNUSABIL],
-        "Total Mustahik": detail[COL_MUSTAHIK],
     })
+    # Total Mustahik dihitung dari penjumlahan kelima fitur asnaf, BUKAN diambil dari kolom
+    # "MUSTAHIK ORANG" pada berkas sumber, karena kolom tersebut ditemukan tidak konsisten/kosong
+    # pada sejumlah baris (anomali sel serupa yang telah diuraikan pada sub-bab 4.2).
+    result["Total Mustahik"] = result[FEATURES].sum(axis=1)
 
     return result.reset_index(drop=True)
 
