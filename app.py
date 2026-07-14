@@ -292,49 +292,64 @@ with tab1:
             type=["csv", "xlsx", "xls"]
         )
 
-        if uploaded is not None:
-            try:
-                if import_mode.startswith("Rekap Zakat"):
-                    if not uploaded.name.endswith((".xlsx", ".xls")):
-                        st.error("Mode 'Rekap Zakat per Kecamatan' hanya mendukung file Excel (.xlsx/.xls).")
-                    else:
-                        parsed = parse_rekap_zakat(uploaded)
-                        st.session_state.data = pd.concat([st.session_state.data, parsed], ignore_index=True)
-                        st.success(
-                            f"{len(parsed)} dukuh berhasil diimpor dari {uploaded.name} "
-                            f"(Kecamatan {parsed['Kecamatan'].iloc[0]}, Periode {parsed['Periode'].iloc[0]})."
-                        )
-                        with st.expander("Lihat detail hasil parsing"):
-                            st.dataframe(parsed, use_container_width=True, hide_index=True)
-                else:
-                    if uploaded.name.endswith(".csv"):
-                        imported = pd.read_csv(uploaded)
-                    else:
-                        imported = pd.read_excel(uploaded)
+        if "last_uploaded_key" not in st.session_state:
+            st.session_state.last_uploaded_key = None
 
-                    required_cols = set(DATA_COLUMNS) - {"Total Mustahik"}
-                    if not required_cols.issubset(set(imported.columns)):
-                        st.error(
-                            "Kolom pada file tidak sesuai. Pastikan file memiliki kolom: "
-                            f"{', '.join(sorted(required_cols))}. "
-                            "Kalau file kamu format rekap per Desa/Dukuh dari berkas sumber, gunakan mode "
-                            "'Rekap Zakat per Kecamatan' di atas."
-                        )
+        if uploaded is None:
+            # file dihapus/kosong -> reset penanda agar file yang sama bisa diproses lagi jika diunggah ulang
+            st.session_state.last_uploaded_key = None
+        else:
+            # Streamlit menjalankan ulang seluruh skrip pada setiap interaksi (ganti tab, klik tombol, dsb).
+            # Tanpa penanda ini, file yang sama akan diproses & ditambahkan berulang kali ke data setiap rerun.
+            file_key = f"{uploaded.name}_{uploaded.size}_{import_mode}"
+            if st.session_state.last_uploaded_key == file_key:
+                st.caption(f"✓ Berkas *{uploaded.name}* sudah diproses. Hapus/ganti berkas untuk mengimpor ulang.")
+            else:
+                try:
+                    if import_mode.startswith("Rekap Zakat"):
+                        if not uploaded.name.endswith((".xlsx", ".xls")):
+                            st.error("Mode 'Rekap Zakat per Kecamatan' hanya mendukung file Excel (.xlsx/.xls).")
+                        else:
+                            parsed = parse_rekap_zakat(uploaded)
+                            st.session_state.data = pd.concat([st.session_state.data, parsed], ignore_index=True)
+                            st.session_state.last_uploaded_key = file_key
+                            st.success(
+                                f"{len(parsed)} dukuh berhasil diimpor dari {uploaded.name} "
+                                f"(Kecamatan {parsed['Kecamatan'].iloc[0]}, Periode {parsed['Periode'].iloc[0]})."
+                            )
+                            with st.expander("Lihat detail hasil parsing"):
+                                st.dataframe(parsed, use_container_width=True, hide_index=True)
                     else:
-                        imported = imported[list(required_cols)].copy()
-                        for f in FEATURES:
-                            imported[f] = pd.to_numeric(imported[f], errors="coerce").fillna(0)
-                        imported["Total Mustahik"] = imported[FEATURES].sum(axis=1)
-                        imported = imported[DATA_COLUMNS]
-                        st.session_state.data = pd.concat([st.session_state.data, imported], ignore_index=True)
-                        st.success(f"{len(imported)} baris berhasil diimpor dari {uploaded.name}.")
-            except Exception as e:
-                st.error(f"Gagal membaca file: {e}")
+                        if uploaded.name.endswith(".csv"):
+                            imported = pd.read_csv(uploaded)
+                        else:
+                            imported = pd.read_excel(uploaded)
+
+                        required_cols = set(DATA_COLUMNS) - {"Total Mustahik"}
+                        if not required_cols.issubset(set(imported.columns)):
+                            st.error(
+                                "Kolom pada file tidak sesuai. Pastikan file memiliki kolom: "
+                                f"{', '.join(sorted(required_cols))}. "
+                                "Kalau file kamu format rekap per Desa/Dukuh dari berkas sumber, gunakan mode "
+                                "'Rekap Zakat per Kecamatan' di atas."
+                            )
+                        else:
+                            imported = imported[list(required_cols)].copy()
+                            for f in FEATURES:
+                                imported[f] = pd.to_numeric(imported[f], errors="coerce").fillna(0)
+                            imported["Total Mustahik"] = imported[FEATURES].sum(axis=1)
+                            imported = imported[DATA_COLUMNS]
+                            st.session_state.data = pd.concat([st.session_state.data, imported], ignore_index=True)
+                            st.session_state.last_uploaded_key = file_key
+                            st.success(f"{len(imported)} baris berhasil diimpor dari {uploaded.name}.")
+                except Exception as e:
+                    st.error(f"Gagal membaca file: {e}")
 
     with col_table:
         st.subheader(f"Data Penyaluran ({len(st.session_state.data)} baris)")
         st.caption("Kamu bisa edit langsung di tabel (klik sel), atau hapus baris lewat ikon 🗑 di ujung kiri baris. "
-                    "Kolom Total Mustahik dihitung otomatis dari penjumlahan kelima fitur asnaf.")
+                    "Kolom Total Mustahik mengikuti angka pada berkas sumber (dapat berbeda dari penjumlahan "
+                    "kelima fitur asnaf) dan dapat diedit manual bila diperlukan.")
 
         edited = st.data_editor(
             st.session_state.data,
@@ -350,8 +365,11 @@ with tab1:
                 "Total Mustahik": st.column_config.NumberColumn(format="%d orang"),
             }
         )
-        # perbarui Total Mustahik apabila ada perubahan manual pada fitur asnaf
-        edited["Total Mustahik"] = edited[FEATURES].sum(axis=1)
+        # Catatan: kolom "Total Mustahik" TIDAK dihitung ulang otomatis dari penjumlahan
+        # kelima fitur asnaf, karena pada berkas sumber nilai Total Mustahik merupakan
+        # angka tersendiri yang dapat berbeda dari hasil penjumlahan Fakir+Miskin+Amil+
+        # Sabilillah+Ibnu Sabil (lihat BAB IV Tabel 4.2/4.3, mis. Dukuh Pegandulan).
+        # Kolom ini tetap dapat diedit manual langsung pada tabel di atas bila diperlukan.
         st.session_state.data = edited
 
         csv_buf = io.StringIO()
