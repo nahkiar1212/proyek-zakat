@@ -8,7 +8,7 @@ Versi ini disesuaikan dengan metodologi BAB IV skripsi:
 - Standardisasi: StandardScaler (Z-score)
 - Algoritma: KMeans (scikit-learn), random_state=42, n_init=20
 - K optimal (default): K=3 -> label Prioritas Rendah / Sedang / Tinggi
-- Evaluasi: Silhouette Score, opsional analisis Elbow Method (K=2 s.d. 8)
+- Evaluasi: Silhouette Score & Davies-Bouldin Index, opsional analisis Elbow Method (K=2 s.d. 8)
 - Visualisasi sebaran klaster: proyeksi PCA 2 dimensi
 - Visualisasi distribusi: boxplot per asnaf berdasarkan kategori klaster
 """
@@ -21,7 +21,7 @@ import seaborn as sns
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from sklearn.metrics import silhouette_score, silhouette_samples
+from sklearn.metrics import silhouette_score, silhouette_samples, davies_bouldin_score
 import io
 import re
 
@@ -401,20 +401,25 @@ with tab2:
         "menggunakan algoritma K-Means, sebagaimana dijelaskan pada BAB IV."
     )
 
-    with st.expander("🔎 Analisis Jumlah Klaster Optimal (Elbow Method & Silhouette Score)"):
-        st.caption("Menghitung SSE (Inertia) dan Silhouette Score untuk K=2 s.d. K=8, mengikuti tahapan pada sub-bab 4.3.")
-        if st.button("Jalankan Analisis Elbow & Silhouette"):
+    with st.expander("🔎 Analisis Jumlah Klaster Optimal (Elbow Method, Silhouette Score & Davies-Bouldin Index)"):
+        st.caption(
+            "Menghitung SSE (Inertia), Silhouette Score, dan Davies-Bouldin Index untuk K=2 s.d. K=8, "
+            "mengikuti tahapan pada sub-bab 4.3. Silhouette Score: semakin **tinggi** semakin baik. "
+            "Davies-Bouldin Index: semakin **rendah** semakin baik."
+        )
+        if st.button("Jalankan Analisis Elbow & Evaluasi"):
             if len(df_all) < 8:
                 st.warning(f"Data valid hanya {len(df_all)} baris, minimal 8 baris diperlukan untuk menguji hingga K=8.")
             else:
                 X_elbow = StandardScaler().fit_transform(df_all[FEATURES].values)
                 k_range = range(2, 9)
-                sse_list, sil_list = [], []
+                sse_list, sil_list, dbi_list = [], [], []
                 for kk in k_range:
                     m = KMeans(n_clusters=kk, random_state=42, n_init=20)
                     a = m.fit_predict(X_elbow)
                     sse_list.append(m.inertia_)
                     sil_list.append(silhouette_score(X_elbow, a))
+                    dbi_list.append(davies_bouldin_score(X_elbow, a))
 
                 fig_e, ax1 = plt.subplots(figsize=(7, 4))
                 ax1.plot(list(k_range), sse_list, marker="o", color="#163829", label="SSE / Inertia")
@@ -422,13 +427,22 @@ with tab2:
                 ax1.set_ylabel("SSE / Inertia", color="#163829")
                 ax2 = ax1.twinx()
                 ax2.plot(list(k_range), sil_list, marker="s", linestyle="--", color="#B9872C", label="Silhouette Score")
-                ax2.set_ylabel("Silhouette Score", color="#B9872C")
-                ax1.set_title("Elbow Method & Silhouette Score untuk Pemilihan K")
+                ax2.plot(list(k_range), dbi_list, marker="^", linestyle=":", color="#8A4B3B", label="Davies-Bouldin Index")
+                ax2.set_ylabel("Silhouette Score / Davies-Bouldin Index")
+                lines1, labels1 = ax1.get_legend_handles_labels()
+                lines2, labels2 = ax2.get_legend_handles_labels()
+                ax2.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=8)
+                ax1.set_title("Elbow Method, Silhouette Score & Davies-Bouldin Index untuk Pemilihan K")
                 fig_e.tight_layout()
                 st.pyplot(fig_e)
 
                 st.dataframe(
-                    pd.DataFrame({"K": list(k_range), "SSE": sse_list, "Silhouette Score": sil_list}),
+                    pd.DataFrame({
+                        "K": list(k_range),
+                        "SSE": sse_list,
+                        "Silhouette Score": [round(v, 3) for v in sil_list],
+                        "Davies-Bouldin Index": [round(v, 3) for v in dbi_list],
+                    }),
                     use_container_width=True, hide_index=True
                 )
 
@@ -459,6 +473,7 @@ with tab2:
 
             sil_overall = silhouette_score(X_scaled, assign)
             sil_samples_ = silhouette_samples(X_scaled, assign)
+            dbi_overall = davies_bouldin_score(X_scaled, assign)
 
             pca = PCA(n_components=2, random_state=42)
             X_pca = pca.fit_transform(X_scaled)
@@ -467,7 +482,8 @@ with tab2:
             st.session_state.last_result = {
                 "df": df_all.copy(), "X_scaled": X_scaled, "X_pca": X_pca, "explained": explained,
                 "rank_labels": rank_labels, "labels_txt": labels_txt,
-                "sil_overall": sil_overall, "sil_samples": sil_samples_, "k": k
+                "sil_overall": sil_overall, "sil_samples": sil_samples_,
+                "dbi_overall": dbi_overall, "k": k
             }
 
         r = st.session_state.last_result
@@ -582,9 +598,10 @@ with tab2:
 
         # ---------------- Matriks Evaluasi ----------------
         st.markdown("### Matriks Evaluasi Klaster")
-        colm1, colm2 = st.columns(2)
-        colm1.metric("Silhouette Score", f"{r['sil_overall']:.3f}")
-        colm2.metric("Jumlah Klaster (K)", r["k"])
+        colm1, colm2, colm3 = st.columns(3)
+        colm1.metric("Silhouette Score", f"{r['sil_overall']:.3f}", help="Semakin mendekati 1, semakin baik (cohesion & separation).")
+        colm2.metric("Davies-Bouldin Index", f"{r['dbi_overall']:.3f}", help="Semakin mendekati 0, semakin baik (rasio sebaran dalam klaster terhadap jarak antar-centroid).")
+        colm3.metric("Jumlah Klaster (K)", r["k"])
 
         eval_rows = []
         for c in range(r["k"]):
@@ -596,6 +613,11 @@ with tab2:
                 "Rata-rata Silhouette": round(avg_sil, 3)
             })
         st.dataframe(pd.DataFrame(eval_rows), use_container_width=True, hide_index=True)
+        st.caption(
+            "Catatan: Davies-Bouldin Index dihitung secara keseluruhan (bukan per klaster), karena metrik ini "
+            "pada dasarnya membandingkan setiap pasangan klaster (rasio sebaran internal terhadap jarak "
+            "antar-centroid), bukan menilai satu klaster secara individual seperti Silhouette Score."
+        )
 
         # ---------------- Tabel Detail ----------------
         st.markdown("### Detail Hasil per Data (Dukuh)")
@@ -614,9 +636,9 @@ with tab2:
         st.caption(
             "Metode: K-Means (scikit-learn) dengan fitur Fakir, Miskin, Amil, Sabilillah, dan Ibnu Sabil "
             "distandardisasi menggunakan StandardScaler (Z-score), parameter random_state=42 dan n_init=20. "
-            "Evaluasi kualitas klaster menggunakan Silhouette Score. Label klaster (Prioritas Rendah/Sedang/Tinggi, "
-            "dst.) ditentukan otomatis dari urutan rata-rata nilai centroid terstandardisasi, konsisten dengan "
-            "prosedur pelabelan pada BAB IV."
+            "Evaluasi kualitas klaster menggunakan Silhouette Score dan Davies-Bouldin Index. Label klaster "
+            "(Prioritas Rendah/Sedang/Tinggi, dst.) ditentukan otomatis dari urutan rata-rata nilai centroid "
+            "terstandardisasi, konsisten dengan prosedur pelabelan pada BAB IV."
         )
     else:
         st.info("Klik **▶ Jalankan Clustering** untuk melihat hasil.")
