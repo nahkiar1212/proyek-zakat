@@ -477,7 +477,7 @@ with tab2:
 
         st.success(f"Selesai · {len(df_r)} data (dukuh) dikelompokkan ke dalam {r['k']} klaster.")
 
-        # ---------------- Sebaran Klaster (PCA) ----------------
+        # ---------------- Sebaran Klaster (PCA) — gaya seaborn ----------------
         st.markdown("### Sebaran Hasil Clustering (Proyeksi PCA)")
         st.caption(
             f"Karena clustering menggunakan 5 fitur, sebaran klaster divisualisasikan pada ruang 2 dimensi "
@@ -485,23 +485,36 @@ with tab2:
             f"±{r['explained'][0] + r['explained'][1]:.0f}% variansi data "
             f"(PC1: {r['explained'][0]:.1f}%, PC2: {r['explained'][1]:.1f}%)."
         )
+
+        df_pca_plot = pd.DataFrame({
+            "PC1": r["X_pca"][:, 0],
+            "PC2": r["X_pca"][:, 1],
+            "Kategori": [r["labels_txt"][c] for c in r["rank_labels"]],
+        })
+
+        SEABORN_PALETTE = ["#5DA5DA", "#F2A93B", "#D9534F", "#5CB85C", "#9B59B6", "#8C6D31", "#3E8E8E", "#7F7F7F"]
+        kategori_order = list(dict.fromkeys(df_pca_plot["Kategori"]))
+        palette_map = {cat: SEABORN_PALETTE[i % len(SEABORN_PALETTE)] for i, cat in enumerate(r["labels_txt"])}
+
+        sns.set_style("whitegrid")
         fig, ax = plt.subplots(figsize=(8, 5))
-        for c in range(r["k"]):
-            mask = r["rank_labels"] == c
-            ax.scatter(
-                r["X_pca"][mask, 0], r["X_pca"][mask, 1],
-                color=CLUSTER_COLORS[c % len(CLUSTER_COLORS)],
-                label=f"Klaster {c+1} · {r['labels_txt'][c]}",
-                s=70, edgecolor="white", alpha=0.85
-            )
-        ax.axhline(0, color="#D7D2BE", linestyle="--", linewidth=1)
-        ax.axvline(0, color="#D7D2BE", linestyle="--", linewidth=1)
+        sns.scatterplot(
+            data=df_pca_plot,
+            x="PC1", y="PC2",
+            hue="Kategori",
+            hue_order=kategori_order,
+            palette=palette_map,
+            s=90,
+            edgecolor="black",
+            linewidth=0.6,
+            alpha=0.9,
+            ax=ax
+        )
+        ax.set_title("Sebaran Dukuh Berdasarkan Hasil K-Means (Proyeksi PCA 2D)", fontsize=12)
         ax.set_xlabel(f"Komponen PCA 1 ({r['explained'][0]:.1f}%)")
         ax.set_ylabel(f"Komponen PCA 2 ({r['explained'][1]:.1f}%)")
-        ax.set_title("Sebaran Dukuh Berdasarkan Hasil K-Means (Proyeksi PCA 2D)")
-        ax.legend(loc="best", fontsize=8)
-        ax.set_facecolor("#F1F0E6")
-        fig.patch.set_facecolor("#F1F0E6")
+        ax.legend(title="Kategori", loc="upper right", frameon=True)
+        fig.tight_layout()
         st.pyplot(fig)
 
         # ---------------- Distribusi Boxplot per Asnaf ----------------
